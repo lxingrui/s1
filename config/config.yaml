@@ -1,0 +1,156 @@
+# =============================================================================
+# s1 Budget-Forcing 复现实验 —— 总配置文件
+# -----------------------------------------------------------------------------
+# 所有「模型选择 / 超参数 / 提示词 / 打分模型 / watchdog / 通知」都集中在这里。
+# 敏感信息（API KEY、webhook）用 ${VAR} 语法从环境变量注入：
+#   - 推荐把它们写在 config/.env 里（见 config/.env.example）
+#   - 也支持 ${VAR:-默认值} 语法
+# 使用方法：python -m s1_eval.run_eval --config config/config.yaml
+# =============================================================================
+
+experiment:
+  name: "s1-32B-budget-forcing"
+  output_dir: "${S1_OUTPUT_DIR:-outputs}"
+  seed: 42
+  # true 时只跑通流程（每个 task 只取 1 条），不真正跑全量
+  dry_run: false
+
+# -----------------------------------------------------------------------------
+# 模型选择：跳过 SFT，直接拉取官方已发布模型做评测
+# -----------------------------------------------------------------------------
+model:
+  name: "simplescaling/s1.1-32B"          # 也可以换成 s1.1-32B / 你自己的 ckpt
+  tokenizer: "Qwen/Qwen2.5-32B-Instruct"
+  backend: "auto"                       # auto / vllm / transformers
+  dtype: "auto"                         # auto / bfloat16 / float16
+  device_map: "auto"                    # 仅 transformers 后端使用
+  tensor_parallel_size: 2               # 仅 vLLM 后端使用
+  max_model_len: 32768                  # 上下文总长度
+  gpu_memory_utilization: 0.90          # 仅 vLLM
+  trust_remote_code: true
+  # 本地缓存目录（runpod 上一般指向数据盘，可被环境变量覆盖）
+  cache_dir: "${HF_HOME:-}"
+
+# -----------------------------------------------------------------------------
+# 评测数据集（可自由增删 task）
+# -----------------------------------------------------------------------------
+eval:
+  tasks:
+    - name: "aime24"
+      dataset: "Maxwell-Jia/AIME_2024"
+      split: "train"
+      question_field: "Problem"
+      answer_field: "Answer"
+      max_samples: 30
+    - name: "math500"
+      dataset: "HuggingFaceH4/MATH-500"
+      split: "test"
+      question_field: "problem"
+      answer_field: "answer"
+      max_samples: 500
+  # 也可以给一个本地 jsonl 文件（每行 {"question":..., "answer":...}）:
+  #   dataset: "/workspace/data/aime24.jsonl"
+  #   question_field: "question"
+  #   answer_field: "answer"
+
+  prompt:
+    system: "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
+    # {question} 会被替换成题目原文
+    query_template: "{question}"
+    # 是否套用 tokenizer 的 chat_template + add_generation_prompt
+    apply_chat_template: true
+
+  grader: "llm"          # llm（用自定义打分模型）或 exact（字符串精确匹配）
+  shuffle: false
+  temperature: 0.0       # 0 表示贪心，复现论文用 0
+  # 传给后端的额外采样参数（temperature 之外的东西）
+  top_p: 1.0
+  max_tokens: 32768      # 单次生成的硬上限（通常由 budget_forcing 覆盖）
+
+# -----------------------------------------------------------------------------
+# Budget Forcing：强塞 "Wait" 的推理机制（复现 s1 原版做法）
+# -----------------------------------------------------------------------------
+budget_forcing:
+  enabled: true
+  # 思考阶段总预算（token）。超过后不再允许继续思考 / 用于截断
+  max_tokens_thinking: 32000
+  # 强塞 ignore_str 的次数（对应原版 NUM_IGNORE）
+  num_ignore: 1
+  # 被强塞进思考流的提示词
+  ignore_str: "Wait"
+  # 思考段边界标记（Qwen / s1 格式）
+  thinking_start: "<|im_start|>think"
+  thinking_end: "<|im_start|>answer"
+  # 触发停止的字符串列表（出现即认为当前思考段结束）
+  stop_strings:
+    - "<|im_start|>"
+    - "<|im_end|>"
+  # 最终作答阶段允许的 token 数
+  max_tokens_answer: 32768
+  # 最终作答前是否加前缀（如 "Final Answer:"），空串表示不加
+  final_answer_prefix: ""
+  # 是否在最终作答前套一个 "answer" 段标记
+  append_thinking_end: true
+
+# -----------------------------------------------------------------------------
+# 打分模型：从 OpenAI 换成自定义的 OpenAI 兼容端点
+# base_url / api_key / model 全部从环境变量读取
+# -----------------------------------------------------------------------------
+grading:
+  # 任何兼容 OpenAI /chat/completions 的服务都可以
+  # 例如：http://localhost:8000/v1 、 https://api.deepseek.com/v1 、 自建 vLLM
+  base_url: "${GRADING_BASE_URL:-}"
+  api_key: "${GRADING_API_KEY:-}"
+  model: "${GRADING_MODEL:-}"
+  max_tokens: 2048
+  temperature: 0.0
+  timeout: 120
+  retries: 5
+  retry_wait_seconds: 5
+  json_format: false
+  system_prompt: |
+    You are a strict but fair grading assistant.
+    You will be given a problem, a model's attempt, and the reference correct answer.
+    Decide whether the attempt's final answer is equivalent to the reference answer.
+    Ignore differences in formatting, units or ordering.
+    End your response on a new line with exactly one token: Yes or No.
+  user_template: |
+    ## Problem
+    {question}
+
+    ## Attempt
+    {attempt}
+
+    ## Correct answer
+    {solution}
+
+# -----------------------------------------------------------------------------
+# Watchdog：超过时限自动终止整个进程（含子进程）
+# -----------------------------------------------------------------------------
+watchdog:
+  enabled: true
+  timeout_minutes: 180        # 3 小时
+  # 终止前给进程的宽限时间（秒），到点还没退出就 SIGKILL
+  grace_seconds: 30
+  # 心跳日志间隔（秒）
+  heartbeat_seconds: 60
+  # 超时后是否连同子进程一起杀掉（runpod 上建议 true）
+  kill_process_group: true
+
+# -----------------------------------------------------------------------------
+# 飞书通知：开始 / 进度 / 完成 / 报错 / 超时 都推送
+# -----------------------------------------------------------------------------
+notify:
+  feishu:
+    enabled: true
+    webhook: "${FEISHU_WEBHOOK:-}"
+    secret: "${FEISHU_SECRET:-}"
+    # 哪些事件触发通知
+    events:
+      - start
+      - progress
+      - complete
+      - error
+      - timeout
+    progress_every: 25        # 每处理 N 条样本推一次进度
+    source: "s1-32B 预算强制复现"

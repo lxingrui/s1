@@ -1,4 +1,20 @@
 ckpts/
 
-wandb/
+qwen0.5b/
+# 屏蔽凭证
+.env
+*.pem
+*.key
 
+# 屏蔽大文件与虚拟环境
+.venv/
+*.safetensors
+*.bin
+*.pt
+test_ckpt/
+checkpoint-*/
+
+# 屏蔽缓存
+__pycache__/
+.cache/
+wandb/

@@ -1,15 +1,55 @@
-from openai import OpenAI
+import os
 import time
+
 import anthropic
-from typing import List, Dict
-from data.utils.io_utils import set_openai_private_key, set_anthropic_private_key
+from openai import OpenAI
+
+from data.utils.io_utils import set_anthropic_private_key, set_openai_private_key
+
+# 当 model_name 为这个哨兵值（或等于环境变量 GRADING_MODEL）时，
+# 走「自定义 OpenAI 兼容端点」，端点信息来自 config/config.yaml + 环境变量。
+CUSTOM_MODEL_SENTINEL = "custom"
+
+
+def grading_model_name() -> str:
+    """返回打分应使用的模型名。
+
+    优先用环境变量 ``GRADING_MODEL``（自定义端点），否则回退到 Claude。
+    """
+    return os.environ.get("GRADING_MODEL") or "claude-3-5-sonnet-20241022"
+
+
+def _is_custom_model(model_name: str) -> bool:
+    if model_name in (CUSTOM_MODEL_SENTINEL, "grading", "self"):
+        return True
+    custom = os.environ.get("GRADING_MODEL")
+    return bool(custom) and model_name == custom
+
+
+def _build_custom_grading_client():
+    """从 config/config.yaml(+/config/.env) 构造自定义打分客户端。"""
+    from s1_eval.config import load_config
+    from s1_eval.grading import GradingClient
+
+    cfg_path = os.environ.get("S1_CONFIG", "config/config.yaml")
+    if os.path.exists(cfg_path):
+        cfg = load_config(cfg_path)
+    else:  # 没有配置文件时，直接读环境变量
+        cfg = {
+            "grading": {
+                "base_url": os.environ.get("GRADING_BASE_URL", ""),
+                "api_key": os.environ.get("GRADING_API_KEY", ""),
+                "model": os.environ.get("GRADING_MODEL", ""),
+            }
+        }
+    return GradingClient.from_config(cfg)
 
 
 def calc_price(model, usage):
     """
     Output the price of the inference in dollars.
     """
-    cached_tokens = usage.prompt_tokens_details['cached_tokens']
+    cached_tokens = usage.prompt_tokens_details["cached_tokens"]
     non_cached_tokens = usage.prompt_tokens - cached_tokens
     output_tokens = usage.completion_tokens
     if model == "gpt-4o":
@@ -31,37 +71,37 @@ def calc_price(model, usage):
         raise ValueError(f"Unsupported model: {model}")
     return input_price + output_price
 
+
 def _gptqa(prompt: str, openai_model_name: str, system_message: str, json_format: bool):
     client = OpenAI()
-    if openai_model_name.startswith('o1'):
+    if openai_model_name.startswith("o1"):
         assert json_format == False, "o1 model does not support json format"
         completion = client.chat.completions.create(
-                model=openai_model_name,
-                messages=[
-                    {"role": "user",
-                     "content": system_message + "\n\n" + prompt},
-                ])
+            model=openai_model_name,
+            messages=[
+                {"role": "user", "content": system_message + "\n\n" + prompt},
+            ],
+        )
     else:
         if json_format:
             completion = client.chat.completions.create(
                 model=openai_model_name,
-                response_format={ "type": "json_object" },
+                response_format={"type": "json_object"},
                 messages=[
-                    {"role": "system",
-                    "content": system_message},
-                    {"role": "user",
-                    "content": prompt},
-                ])
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": prompt},
+                ],
+            )
         else:
             completion = client.chat.completions.create(
                 model=openai_model_name,
                 messages=[
-                    {"role": "system",
-                    "content": system_message},
-                    {"role": "user",
-                    "content": prompt},
-                ])
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": prompt},
+                ],
+            )
     return completion.choices[0].message.content, completion.usage
+
 
 def _claudeqa(prompt: str, system_message: str):
     client = anthropic.Anthropic()
@@ -69,33 +109,39 @@ def _claudeqa(prompt: str, system_message: str):
         model="claude-3-5-sonnet-20241022",
         max_tokens=8192,
         system=system_message,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
+        messages=[{"role": "user", "content": prompt}],
     )
     return message.content[0].text, message.usage
 
+
 def apiqa(prompt: str, model_name: str, system_message: str, json_format: bool = True):
     completion = None
+    usage = None
     while completion is None:
         try:
-            if model_name == 'claude-3-5-sonnet-20241022':
+            if _is_custom_model(model_name):
+                # 自定义 OpenAI 兼容端点（base_url / api_key / model 来自配置文件）
+                client = _build_custom_grading_client()
+                completion = client.chat(
+                    prompt, system_prompt=system_message, json_format=json_format
+                )
+            elif model_name == "claude-3-5-sonnet-20241022":
                 set_anthropic_private_key()
                 assert json_format == False, "Claude does not support json format"
                 completion, usage = _claudeqa(prompt, system_message)
             else:
                 set_openai_private_key()
-                completion, usage = _gptqa(prompt, model_name, system_message, json_format)
+                completion, usage = _gptqa(
+                    prompt, model_name, system_message, json_format
+                )
         except Exception as e:
-            print(f"Exception: {str(e)}")
+            print(f"Exception: {e!s}")
             time.sleep(60)
-    
+
     return completion, usage
 
-def claude_multi_round(system_prompt: str, messages: List[Dict[str, str]]):
+
+def claude_multi_round(system_prompt: str, messages: list[dict[str, str]]):
     completion = None
     while completion is None:
         try:
@@ -105,10 +151,10 @@ def claude_multi_round(system_prompt: str, messages: List[Dict[str, str]]):
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=8192,
                 system=system_prompt,
-                messages=messages
+                messages=messages,
             )
             completion = message.content[0].text
         except Exception as e:
-            print(f"Exception: {str(e)}")
+            print(f"Exception: {e!s}")
             time.sleep(60)
     return completion, message.usage
