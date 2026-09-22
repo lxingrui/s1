@@ -89,6 +89,25 @@ python -m s1_eval.config config/config.yaml
 python send_feishu.py "配置自检：这是一条测试消息" --event info
 ```
 
+### 3.1 使用云端网络卷（RunPod Global Volume / FUSE）时必读 ★
+
+RunPod Global Volume(`FUSE.GEESEFS`)等网络存储**不支持 POSIX 符号链接**。HF 默认缓存布局是
+`snapshots/<rev>/file → ../../blobs/<sha>` 的软链接;在这类文件系统上会退化成 **0 字节死链**,
+随后读取 `config.json` 抛 `JSONDecodeError`。处理方式(任选其一):
+
+1. **让 HF 复制实体文件(推荐,脚本已自动处理)**:设 `HF_HUB_DISABLE_SYMLINKS=1`。
+   `scripts/run_eval.sh` 会自动检测 `HF_HOME` 所在文件系统,若是 `fuse/nfs/smb` 等网络卷就自动开启。
+2. **分词器/权重放本地盘**:例如 `cp -r /workspace/.../qwen_tokenizer /root/qwen_tokenizer`,
+   然后 `config.yaml` 里写 `model.tokenizer: "root/qwen_tokenizer"`——
+   **漏写前导斜杠也没关系**,配置加载时会自动归一化为绝对路径 `/root/qwen_tokenizer`,
+   不会再去 `huggingface.co` 发网络请求(避免 401)。
+3. **下载时指定 `--local-dir` 直接落盘为实体文件**(建议落在本地盘):
+   ```bash
+   huggingface-cli download simplescaling/s1.1-32B --local-dir /root/models/s1.1-32B
+   ```
+
+> 注意:即便用 `--local-dir`,若目标目录仍在网络卷上,也可能遇到软链接问题。
+
 ---
 
 ## 4. 步骤三：安装依赖（只补缺包）
@@ -100,8 +119,10 @@ bash scripts/run_eval.sh --install
 该命令:
 
 1. 检查 `pyyaml / openai / datasets / transformers / accelerate / hf_transfer`,**只装缺失的**;
-2. 检测 `vllm`,缺失则 `pip install vllm`(pip 自动匹配当前 torch/CUDA);装不上会自动回退 `transformers` 后端;
-3. **不会执行 `pip install -r requirements.txt`**,因此不会覆盖镜像自带的 torch/CUDA。
+2. **按驱动 CUDA 版本锁定 torch**(CUDA 12.x → 约束 `torch<2.10.0`),避免 pip 把 torch
+   换成 **cu130** 导致 `NVIDIA driver on your system is too old`;
+3. 检测 `vllm`,缺失则带上述约束安装;带约束失败时改用 `--no-deps`(保持 torch 不变);
+4. **不会执行 `pip install -r requirements.txt`**,因此不会覆盖镜像自带的 torch/CUDA。
 
 期望输出(节选):
 
@@ -322,6 +343,7 @@ bash auto_run_and_kill.sh
 | `S1_BUDGET_FORCING` | `0/1` 开关 |
 | `S1_PAUSE_ON_EXIT` | `1` 时跑完不退出容器(看日志用) |
 | `HF_HOME` / `HF_ENDPOINT` / `HF_HUB_ENABLE_HF_TRANSFER` | HuggingFace 缓存/镜像/加速 |
+| `HF_HUB_DISABLE_SYMLINKS` | `1`=缓存用实体文件而非软链接(网络卷必备,脚本自动检测) |
 
 ---
 
@@ -337,6 +359,9 @@ bash auto_run_and_kill.sh
 | `vllm` 装不上 | 忽略,会自动回退 `transformers`(较慢) |
 | HF 下载慢/超时 | `.env` 设 `HF_ENDPOINT="https://hf-mirror.com"` |
 | `hf_transfer` 相关报错 | `pip install hf_transfer`,或注释掉 `HF_HUB_ENABLE_HF_TRANSFER` |
+| `JSONDecodeError` / `config.json` 为 0 字节 | 网络卷不支持软链接 → 设 `HF_HUB_DISABLE_SYMLINKS=1` 或把权重/分词器放本地盘(见 §3.1) |
+| `401 Unauthorized` 访问 `huggingface.co/root/...` | 本地路径漏写前导 `/`,改成绝对路径(配置加载会自动尝试补 `/`) |
+| torch 被升级到 cu13 / `driver too old` | 用 `--install`(已按 CUDA 版本加约束);或手动固定 `torch==<当前版本>` |
 | 飞书无消息 | 检查 `FEISHU_WEBHOOK`;`python send_feishu.py "测试"` |
 | 进程被 watchdog 杀掉 | 超时;调大 `watchdog.timeout_minutes` |
 | runpod 不停机 | 用 `runpodctl stop pod "$RUNPOD_POD_ID"` |

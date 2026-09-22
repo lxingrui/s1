@@ -61,6 +61,39 @@ def _resolve(value: Any, env: dict[str, str]) -> Any:
     return value
 
 
+def normalize_path(path_str: Any) -> Any:
+    """把「看起来是本地路径」的字符串归一化为绝对路径。
+
+    目的:避免把 ``root/qwen_tokenizer`` 这类**漏写前导斜杠**的本地目录,
+    误当成 HuggingFace Hub 仓库 id(``org/name``)去发网络请求(401)。
+
+    - 路径存在(含补上前导 ``/`` 后存在)→ 返回绝对路径;
+    - 否则原样返回(例如真正的 HF repo id ``simplescaling/s1.1-32B``)。
+    """
+    if not isinstance(path_str, str) or not path_str:
+        return path_str
+
+    candidates = [path_str]
+    # 含目录分隔符 / 以 ~ 或 . 开头时,尝试补上前导斜杠
+    if "/" in path_str or path_str.startswith("~"):
+        candidates.append("/" + path_str)
+
+    for cand in candidates:
+        expanded = os.path.abspath(os.path.expanduser(cand))
+        if os.path.exists(expanded):
+            return expanded
+    return path_str
+
+
+def _normalize_paths(cfg: Config) -> Config:
+    """对模型相关路径做本地路径归一化。"""
+    for key in ("name", "tokenizer", "cache_dir"):
+        value = cfg.get_path(f"model.{key}")
+        if value:
+            cfg.set_path(f"model.{key}", normalize_path(value))
+    return cfg
+
+
 class Config(dict):
     """支持 ``cfg.model.name`` 和 ``cfg["model"]["name"]`` 两种访问方式。"""
 
@@ -140,7 +173,8 @@ def load_config(
     raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
     resolved = _resolve(raw, env)
     cfg = Config(resolved)
-    return _apply_env_overrides(cfg)
+    cfg = _apply_env_overrides(cfg)
+    return _normalize_paths(cfg)
 
 
 if __name__ == "__main__":  # 便于排查配置是否正确

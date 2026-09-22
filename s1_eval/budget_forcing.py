@@ -197,6 +197,26 @@ class BudgetForcingPipeline:
         return [self._generate_hf_one(q) for q in questions]
 
     # ------------------------- vLLM（批量）---------------------------- #
+    def _vllm_generate(self, token_id_batches: list[list[int]], sampling_params):
+        """调用 vLLM 生成，兼容 v0 / v1 (Engine) 两种签名。
+
+        vLLM v1 起，``LLM.generate()`` 不再接受 ``prompt_token_ids=`` 关键字参数，
+        必须把 token ids 包装进 ``prompts=[{"prompt_token_ids": [...]}, ...]``。
+        """
+        prompts = [{"prompt_token_ids": ids} for ids in token_id_batches]
+        try:
+            return self._llm.generate(
+                prompts=prompts,
+                sampling_params=sampling_params,
+                use_tqdm=False,
+            )
+        except TypeError:
+            # 极老版本 vLLM 只认 prompt_token_ids 关键字参数
+            return self._llm.generate(
+                prompt_token_ids=token_id_batches,
+                sampling_params=sampling_params,
+            )
+
     def _generate_vllm(self, questions: list[str]) -> list[dict[str, Any]]:
         from vllm import SamplingParams
 
@@ -229,9 +249,7 @@ class BudgetForcingPipeline:
                 temperature=temperature,
                 top_p=top_p,
             )
-            outs = self._llm.generate(
-                prompt_token_ids=active_prompts, sampling_params=sp
-            )
+            outs = self._vllm_generate(active_prompts, sp)
             next_prompts: list[list[int]] = []
             next_idx: list[int] = []
             for j, out in enumerate(outs):
@@ -270,9 +288,7 @@ class BudgetForcingPipeline:
             temperature=temperature,
             top_p=top_p,
         )
-        outs_final = self._llm.generate(
-            prompt_token_ids=final_prompts, sampling_params=sp_final
-        )
+        outs_final = self._vllm_generate(final_prompts, sp_final)
 
         results: list[dict[str, Any]] = []
         for i in range(len(questions)):

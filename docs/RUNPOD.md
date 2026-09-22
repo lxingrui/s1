@@ -52,9 +52,26 @@ bash scripts/run_eval.sh --install
 该命令的行为:
 
 1. 逐个检查 `pyyaml / openai / datasets / transformers / accelerate / hf_transfer`,**只安装缺失的**;
-2. 检查 `vllm`,缺失时尝试 `pip install vllm`(由 pip 自动匹配 cu128 + torch 2.8);
-3. **绝不执行 `pip install -r requirements.txt`**,以免把镜像自带的 torch 降级、破坏 CUDA 兼容;
-4. 若 vLLM 装不上,评测会自动回退到 `transformers` 后端(慢一些但能跑通)。
+2. **按驱动 CUDA 版本锁定 torch**:检测到 CUDA 12.x 时写约束 `torch<2.10.0`,安装 vLLM 时用 `-c` 生效,
+   防止 pip 把 torch 升级成 **cu130**(驱动 12.8 不支持,会报 `NVIDIA driver on your system is too old` 并回退 CPU);
+3. 检查 `vllm`,缺失时带约束安装;带约束失败时改用 `--no-deps`(保持 torch 不动);
+4. **绝不执行 `pip install -r requirements.txt`**;
+5. 若 vLLM 最终装不上,评测会自动回退到 `transformers` 后端(慢一些但能跑通)。
+
+### 2.1 云端网络卷(FUSE / GEESEFS)注意事项 ★
+
+RunPod Global Volume(`FUSE.GEESEFS`)等网络存储**不支持 POSIX 符号链接**。HF 默认缓存布局是
+`snapshots/<rev>/file → ../../blobs/<sha>` 的软链接,在这类文件系统上会退化成 **0 字节死链**,
+读取 `config.json` 时抛 `JSONDecodeError`。处理方式(任选其一):
+
+1. **让 HF 复制实体文件(脚本已自动处理)**:`scripts/run_eval.sh` 会检测 `HF_HOME` 所在文件系统,
+   若是 `fuse/nfs/smb` 等网络卷就自动 `export HF_HUB_DISABLE_SYMLINKS=1`;也可在 `config/.env` 手动开启。
+2. **分词器/权重放本地盘**:把分词器复制到 `/root/qwen_tokenizer`,再在 `config.yaml` 里写
+   `model.tokenizer: "root/qwen_tokenizer"`(漏写前导斜杠也没关系,加载时自动归一化为绝对路径)。
+3. **下载时指定 `--local-dir` 直接落盘为实体文件**(建议落在本地盘):
+   ```bash
+   huggingface-cli download simplescaling/s1.1-32B --local-dir /root/models/s1.1-32B
+   ```
 
 ---
 
@@ -238,6 +255,9 @@ s1 Budget Forcing 评测启动（数据并行 × 2）| run_id=20260922_153000
 | **vLLM 装不上** | 忽略即可,会自动回退 `transformers` 后端 |
 | **HF 下载慢/超时** | `.env` 里设 `HF_ENDPOINT="https://hf-mirror.com"` |
 | **`hf_transfer` 报错** | `pip install hf_transfer`,或注释掉 `HF_HUB_ENABLE_HF_TRANSFER` |
+| **`JSONDecodeError` / `config.json` 为 0 字节** | 网络卷不支持软链接 → 设 `HF_HUB_DISABLE_SYMLINKS=1` 或把权重/分词器放本地盘(见 §2.1) |
+| **`401 Unauthorized` 访问 `huggingface.co/root/...`** | 本地路径漏写前导 `/`,改成绝对路径(配置加载会自动尝试补 `/`) |
+| **torch 被升级到 cu13 / `driver too old`** | 用 `--install`(已按 CUDA 版本加约束);或手动 `pip install -c` 固定 torch |
 | **飞书没有消息** | 检查 `FEISHU_WEBHOOK`;手测 `python send_feishu.py "测试"` |
 | **想跑完后看日志再关机** | 设 `S1_PAUSE_ON_EXIT=1` |
 | **runpod 不停机** | 容器内 `shutdown -h now` 无效,必须用 `runpodctl stop pod $RUNPOD_POD_ID` |
