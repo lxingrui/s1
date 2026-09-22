@@ -86,7 +86,11 @@ sampling_params = SamplingParams(
 )
 
 prompt = "How many r in raspberry"
-prompt = "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n"
+prompt = (
+    "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\n"
+    + prompt
+    + "<|im_end|>\n<|im_start|>assistant\n"
+)
 
 o = model.generate(prompt, sampling_params=sampling_params)
 print(o[0].outputs[0].text)
@@ -104,12 +108,10 @@ MAX_TOKENS_THINKING = 32000
 NUM_IGNORE = 1
 
 model = LLM(
-    "simplescaling/s1-32B", # s1 originally gets this prompt wrong but with budget forcing it fixes it
+    "simplescaling/s1-32B",  # s1 originally gets this prompt wrong but with budget forcing it fixes it
     tensor_parallel_size=2,
 )
-tok = AutoTokenizer.from_pretrained(
-    "simplescaling/s1-32B"
-)
+tok = AutoTokenizer.from_pretrained("simplescaling/s1-32B")
 
 stop_token_ids = tok("<|im_end|>")["input_ids"]
 sampling_params = SamplingParams(
@@ -126,7 +128,11 @@ prompts = [
 ]
 
 for i, p in enumerate(prompts):
-    prompt = "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\n" + p + "<|im_end|>\n<|im_start|>assistant\n"
+    prompt = (
+        "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n<|im_start|>user\n"
+        + p
+        + "<|im_end|>\n<|im_start|>assistant\n"
+    )
     stop_token_ids = tok("<|im_start|><|im_end|>")["input_ids"]
     sampling_params = SamplingParams(
         max_tokens=MAX_TOKENS_THINKING,
@@ -136,13 +142,10 @@ for i, p in enumerate(prompts):
         temperature=0.0,
     )
     prompt += "<|im_start|>think"
-    o = model.generate(
-        prompt,
-        sampling_params=sampling_params
-    )
+    o = model.generate(prompt, sampling_params=sampling_params)
     ignore_str = "Wait"
     max_tokens_thinking_tmp = MAX_TOKENS_THINKING
-    for i in range(NUM_IGNORE): # Num of times to skip stop token
+    for i in range(NUM_IGNORE):  # Num of times to skip stop token
         max_tokens_thinking_tmp -= len(o[0].outputs[0].token_ids)
         if max_tokens_thinking_tmp > 0:
             prompt += o[0].outputs[0].text + ignore_str
@@ -153,12 +156,11 @@ for i, p in enumerate(prompts):
                 skip_special_tokens=False,
                 temperature=0.0,
             )
-            o = model.generate(
-                prompt,
-                sampling_params=sampling_params
-            )
+            o = model.generate(prompt, sampling_params=sampling_params)
     ### Final answer ###
-    prompt += o[0].outputs[0].text # You can also append "Final Answer:" here like we do for some evaluations to prevent the model from just continuing to reason in its answer when early exiting
+    prompt += (
+        o[0].outputs[0].text
+    )  # You can also append "Final Answer:" here like we do for some evaluations to prevent the model from just continuing to reason in its answer when early exiting
     stop_token_ids = tok("<|im_end|>")["input_ids"]
     sampling_params = SamplingParams(
         max_tokens=32768,
@@ -171,7 +173,9 @@ for i, p in enumerate(prompts):
         prompt,
         sampling_params=sampling_params,
     )
-    print("With budget forcing:") # You will see that after the "Wait" in the reasoning trace it fixes its answer
+    print(
+        "With budget forcing:"
+    )  # You will see that after the "Wait" in the reasoning trace it fixes its answer
     print(prompt + o[0].outputs[0].text)
 ```
 
@@ -187,30 +191,27 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 model_name = "simplescaling/s1.1-32B"
 
 model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    torch_dtype="auto",
-    device_map="auto"
+    model_name, torch_dtype="auto", device_map="auto"
 )
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 prompt = "How many r in raspberry"
 messages = [
-    {"role": "system", "content": "You are a helpful and harmless assistant. You are Qwen developed by Alibaba. You should think step-by-step."},
-    {"role": "user", "content": prompt}
+    {
+        "role": "system",
+        "content": "You are a helpful and harmless assistant. You are Qwen developed by Alibaba. You should think step-by-step.",
+    },
+    {"role": "user", "content": prompt},
 ]
 text = tokenizer.apply_chat_template(
-    messages,
-    tokenize=False,
-    add_generation_prompt=True
+    messages, tokenize=False, add_generation_prompt=True
 )
 model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
 
-generated_ids = model.generate(
-    **model_inputs,
-    max_new_tokens=512
-)
+generated_ids = model.generate(**model_inputs, max_new_tokens=512)
 generated_ids = [
-    output_ids[len(input_ids):] for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+    output_ids[len(input_ids) :]
+    for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
 ]
 
 response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
