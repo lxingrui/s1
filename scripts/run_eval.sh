@@ -2,14 +2,16 @@
 # =============================================================================
 # runpod 一键启动脚本
 # -----------------------------------------------------------------------------
-# 跳过 SFT 训练，直接拉取 simplescaling/s1-32B，跑原版 Budget Forcing 评测。
+# 跳过 SFT 训练，直接拉取 simplescaling/s1.1-32B，跑原版 Budget Forcing 评测。
+# 支持双卡数据并行（config.yaml: model.parallel=data），爆显存可切 tensor 张量并行。
 # 内置 watchdog（超时自动终止）+ 飞书通知（开始/进度/完成/报错/超时）。
 #
 # 用法：
-#   bash scripts/run_eval.sh                 # 直接跑
-#   bash scripts/run_eval.sh --install       # 先装依赖再跑
-#   bash scripts/run_eval.sh --limit 5       # 只跑 5 条
-#   bash scripts/run_eval.sh --dry-run       # 冒烟测试
+#   bash scripts/run_eval.sh                       # 直接跑
+#   bash scripts/run_eval.sh --install             # 只补装缺失依赖（不动镜像自带 torch）
+#   bash scripts/run_eval.sh --limit 5             # 只跑 5 条
+#   bash scripts/run_eval.sh --dry-run             # 冒烟测试
+#   bash scripts/run_eval.sh --parallel tensor     # 临时切张量并行
 # 所有额外参数都会透传给 s1_eval.run_eval
 # =============================================================================
 set -euo pipefail
@@ -41,6 +43,12 @@ export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
 mkdir -p "${HF_HOME}"
 echo ">>> HF_HOME=${HF_HOME}"
 
+if command -v nvidia-smi >/dev/null 2>&1; then
+    echo ">>> 检测到 GPU："
+    nvidia-smi -L 2>/dev/null | sed 's/^/    /' || true
+    echo ">>> 可见 GPU 数：$(nvidia-smi -L 2>/dev/null | grep -c '^GPU ') "
+fi
+
 # 让 watchdog 的进程组终止生效（脚本自身成为进程组组长）
 export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
@@ -59,14 +67,38 @@ for arg in "$@"; do
 done
 
 if [ "${INSTALL}" = "1" ]; then
-    echo ">>> 安装依赖（runpod 建议：已自带 CUDA 镜像时优先装 wheel）..."
-    python -m pip install --upgrade pip
-    # PyTorch 底座：按需选择 CUDA 版本
-    python -m pip install "torch>=2.5" --index-url https://download.pytorch.org/whl/cu124 || true
-    python -m pip install -r requirements.txt
-    # Budget Forcing 原版用 vLLM，若镜像未内置则安装
-    python -m pip install vllm || echo ">>> vLLM 安装失败，将自动回退 transformers 后端"
-    python -m pip install pyyaml openai
+    echo ">>> 只补装缺失依赖（绝不覆盖镜像自带的 torch / CUDA）..."
+    python - <<'PY'
+import importlib.util
+import subprocess
+import sys
+
+# 运行 s1_eval 的最小依赖：模块名 -> pip 包名
+NEED = {
+    "yaml": "pyyaml",
+    "openai": "openai",
+    "datasets": "datasets",
+    "transformers": "transformers",
+    "accelerate": "accelerate",
+    "hf_transfer": "hf_transfer",
+}
+missing = [pkg for mod, pkg in NEED.items() if importlib.util.find_spec(mod) is None]
+if missing:
+    print(">>> 缺失依赖，即将安装:", ", ".join(missing))
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
+else:
+    print(">>> 基础依赖齐备")
+
+# Budget Forcing 原版机制用 vLLM，交给 pip 自动匹配当前 torch/CUDA。
+# 装不上就跳过（运行时会自动回退 transformers 后端）。
+if importlib.util.find_spec("vllm") is None:
+    print(">>> 未检测到 vllm，尝试安装与当前 torch/CUDA 匹配的版本...")
+    rc = subprocess.call([sys.executable, "-m", "pip", "install", "vllm"])
+    if rc != 0:
+        print(">>> vLLM 安装失败，将自动回退 transformers 后端")
+else:
+    print(">>> vllm 已存在，跳过")
+PY
 fi
 
 # ---------------------------- 校验依赖 ----------------------------

@@ -47,6 +47,21 @@ This repository provides an overview of all resources for the paper ["s1: Simple
 - `data/`: Synthetic data creation scripts & co
 - `train/`: Training scripts
 
+### 本仓库的 Budget Forcing 复现方式
+
+本项目已改造为**配置驱动**的一键评测流水线：跳过 SFT，直接拉 `simplescaling/s1.1-32B`，
+复现「强塞 Wait」的 Budget Forcing 机制，并带 Watchdog 超时保护与飞书通知。
+
+- 完整运行指导：[`docs/RUNBOOK.md`](docs/RUNBOOK.md)
+- runpod 环境专项：[`docs/RUNPOD.md`](docs/RUNPOD.md)
+- 配置项说明：[`config/README.md`](config/README.md)
+
+```bash
+cp config/.env.example config/.env   # 填 GRADING_* / FEISHU_*
+bash scripts/run_eval.sh --install   # 只补装缺失依赖
+bash scripts/run_eval.sh             # 正式评测
+```
+
 ### Inference
 
 #### vLLM

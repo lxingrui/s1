@@ -42,7 +42,7 @@ class FeishuNotifier:
         webhook: str = "",
         secret: str = "",
         enabled: bool = True,
-        source: str = "s1-32B 预算强制复现",
+        source: str = "s1.1-32B 预算强制复现",
         events: list | None = None,
         progress_every: int = 25,
     ) -> None:
@@ -63,7 +63,7 @@ class FeishuNotifier:
             webhook=node.get("webhook", ""),
             secret=node.get("secret", ""),
             enabled=node.get("enabled", True),
-            source=node.get("source", "s1-32B 预算强制复现"),
+            source=node.get("source", "s1.1-32B 预算强制复现"),
             events=node.get("events"),
             progress_every=node.get("progress_every", 25),
         )

@@ -8,6 +8,8 @@
 | `.env` | 你的密钥（**不要提交到 git**），从 `.env.example` 复制而来 |
 | `.env.example` | `.env` 的模板 |
 
+> 完整运行指导见 [`docs/RUNBOOK.md`](../docs/RUNBOOK.md);runpod 环境专项见 [`docs/RUNPOD.md`](../docs/RUNPOD.md)。
+
 ## 快速开始
 
 ```bash
@@ -30,11 +32,17 @@ bash scripts/run_eval.sh
 
 ```yaml
 model:
-  name: "simplescaling/s1-32B"      # 或 s1.1-32B / 自己的 ckpt
+  name: "simplescaling/s1.1-32B"    # 或 s1-32B / 自己的 ckpt
   tokenizer: "Qwen/Qwen2.5-32B-Instruct"
   backend: "auto"                   # auto / vllm / transformers
-  tensor_parallel_size: 2           # vLLM 张量并行
+  parallel: "data"                  # data=双卡数据并行 / tensor=张量并行
+  num_gpus: 2                       # data 并行使用的卡数；0=自动检测
+  tensor_parallel_size: 2           # 仅 parallel=tensor 时生效
 ```
+
+- **`data`(推荐先用)**:每张卡各放一份完整模型副本、样本切分 → 速度 ≈ ×卡数。
+- **`tensor`**:单份模型切到多卡 → 显存不够(OOM)时切换。
+- 临时覆盖:`bash scripts/run_eval.sh --parallel tensor`。
 
 ### Budget Forcing（强塞 "Wait"）
 
@@ -102,6 +110,8 @@ notify:
 | `S1_LIMIT` | 每个 task 最多评测条数 |
 | `S1_MODEL_NAME` | 覆盖模型名 |
 | `S1_TENSOR_PARALLEL_SIZE` | vLLM 张量并行 |
+| `S1_PARALLEL` | 并行策略 `data` / `tensor` |
+| `S1_NUM_GPUS` | data 并行使用的卡数 |
 | `S1_TIMEOUT_MINUTES` | watchdog 超时 |
 | `S1_BUDGET_FORCING` | `0/1` 开关 Budget Forcing |
 | `S1_PAUSE_ON_EXIT` | `1` 时评测结束后不退出容器（方便看日志） |
@@ -113,3 +123,4 @@ notify:
 - `run.log`：完整日志
 - `results.jsonl`：每条样本的思考链 / 答案 / 打分结果
 - `summary.json`：各任务准确率与总体准确率
+- （数据并行时）`shard<i>.log` / `shard<i>.jsonl`：各 GPU 的日志与中间结果

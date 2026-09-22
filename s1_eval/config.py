@@ -101,6 +101,10 @@ def _apply_env_overrides(cfg: Config) -> Config:
         cfg.set_path("model.name", env["S1_MODEL_NAME"])
     if env.get("S1_TENSOR_PARALLEL_SIZE"):
         cfg.set_path("model.tensor_parallel_size", int(env["S1_TENSOR_PARALLEL_SIZE"]))
+    if env.get("S1_PARALLEL"):
+        cfg.set_path("model.parallel", env["S1_PARALLEL"])
+    if env.get("S1_NUM_GPUS") and str(env["S1_NUM_GPUS"]).isdigit():
+        cfg.set_path("model.num_gpus", int(env["S1_NUM_GPUS"]))
     if env.get("S1_TIMEOUT_MINUTES"):
         cfg.set_path("watchdog.timeout_minutes", float(env["S1_TIMEOUT_MINUTES"]))
     if env.get("S1_BUDGET_FORCING") is not None:

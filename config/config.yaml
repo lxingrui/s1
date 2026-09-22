@@ -9,7 +9,7 @@
 # =============================================================================
 
 experiment:
-  name: "s1-32B-budget-forcing"
+  name: "s1.1-32B-budget-forcing"
   output_dir: "${S1_OUTPUT_DIR:-outputs}"
   seed: 42
   # true 时只跑通流程（每个 task 只取 1 条），不真正跑全量
@@ -19,12 +19,17 @@ experiment:
 # 模型选择：跳过 SFT，直接拉取官方已发布模型做评测
 # -----------------------------------------------------------------------------
 model:
-  name: "simplescaling/s1.1-32B"          # 也可以换成 s1.1-32B / 你自己的 ckpt
+  name: "simplescaling/s1.1-32B"          # 也可以换成 s1-32B / 你自己的 ckpt
   tokenizer: "Qwen/Qwen2.5-32B-Instruct"
   backend: "auto"                       # auto / vllm / transformers
+  # 并行策略（双 A100 建议先用 data，爆显存再换 tensor）：
+  #   data   = 每张卡各放一份完整模型副本、按样本切分（数据并行，速度 ≈ ×卡数）
+  #   tensor = 把单份模型切到多张卡（张量并行，省显存但通信开销大）
+  parallel: "data"
+  num_gpus: 2                           # data 并行使用的卡数；0 = 自动检测
+  tensor_parallel_size: 2               # 仅 parallel=tensor 时生效
   dtype: "auto"                         # auto / bfloat16 / float16
   device_map: "auto"                    # 仅 transformers 后端使用
-  tensor_parallel_size: 2               # 仅 vLLM 后端使用
   max_model_len: 32768                  # 上下文总长度
   gpu_memory_utilization: 0.90          # 仅 vLLM
   trust_remote_code: true
@@ -153,4 +158,4 @@ notify:
       - error
       - timeout
     progress_every: 25        # 每处理 N 条样本推一次进度
-    source: "s1-32B 预算强制复现"
+    source: "s1.1-32B 预算强制复现"
