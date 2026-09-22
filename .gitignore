@@ -17,4 +17,4 @@ checkpoint-*/
 # 屏蔽缓存
 __pycache__/
 .cache/
-wandb/
+wandb/results/**/*.jsonl
